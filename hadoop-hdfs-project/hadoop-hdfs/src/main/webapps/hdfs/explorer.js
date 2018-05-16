@@ -192,13 +192,40 @@
       var download_url = '/webhdfs/v1' + abs_path + '?op=OPEN';
 
       $('#file-info-download').attr('href', download_url);
-      $('#file-info-preview').click(function() {
+
+      var processPreview = function(url) {
+        url += "&noredirect=true";
+        $.ajax({
+          type: 'GET',
+          url: url,
+          processData: false,
+          crossDomain: true
+        }).done(function(data) {
+          url = data.Location;
+          $.ajax({
+            type: 'GET',
+            url: url,
+            processData: false,
+            crossDomain: true
+          }).complete(function(data) {
+            $('#file-info-preview-body').val(data.responseText);
+            $('#file-info-tail').show();
+          }).error(function(jqXHR, textStatus, errorThrown) {
+            show_err_msg("Couldn't preview the file. " + errorThrown);
+          });
+        }).error(function(jqXHR, textStatus, errorThrown) {
+          show_err_msg("Couldn't find datanode to read file from. " + errorThrown);
+        });
+      }
+
+      $('#file-info-preview-tail').click(function() {
         var offset = d.fileLength - TAIL_CHUNK_SIZE;
         var url = offset > 0 ? download_url + '&offset=' + offset : download_url;
-        $.get(url, function(t) {
-          $('#file-info-preview-body').val(t);
-          $('#file-info-tail').show();
-        }, "text").error(network_error_handler(url));
+        processPreview(url);
+      });
+      $('#file-info-preview-head').click(function() {
+        var url = d.fileLength > TAIL_CHUNK_SIZE ? download_url + '&length=' + TAIL_CHUNK_SIZE : download_url;
+        processPreview(url);
       });
 
       if (d.fileLength > 0) {
@@ -343,6 +370,12 @@
 
     var b = function() { browse_directory($('#directory').val()); };
     $('#btn-nav-directory').click(b);
+    //Also navigate to the directory when a user presses enter.
+    $('#directory').on('keyup', function (e) {
+      if (e.which == 13) {
+        browse_directory($('#directory').val());
+      }
+    });
     var dir = window.location.hash.slice(1);
     if(dir == "") {
       window.location.hash = "/";
@@ -407,21 +440,28 @@
           }).complete(function(data) {
             numCompleted++;
             if(numCompleted == files.length) {
-              $('#modal-upload-file').modal('hide');
-              $('#modal-upload-file-button').button('reset');
+              reset_upload_button();
               browse_directory(current_directory);
             }
           }).error(function(jqXHR, textStatus, errorThrown) {
             numCompleted++;
+            reset_upload_button();
             show_err_msg("Couldn't upload the file " + file.file.name + ". "+ errorThrown);
           });
         }).error(function(jqXHR, textStatus, errorThrown) {
           numCompleted++;
+          reset_upload_button();
           show_err_msg("Couldn't find datanode to write file. " + errorThrown);
         });
       })();
     }
   });
+
+  //Reset the upload button
+  function reset_upload_button() {
+    $('#modal-upload-file').modal('hide');
+    $('#modal-upload-file-button').button('reset');
+  }
 
   //Store the list of files which have been checked into session storage
   function store_selected_files(current_directory) {

@@ -40,10 +40,9 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
+import org.apache.hadoop.http.JettyUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Time;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineAbout;
@@ -56,6 +55,8 @@ import org.apache.hadoop.yarn.webapp.NotFoundException;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.Singleton;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** REST end point for Timeline Reader. */
 @Private
@@ -63,8 +64,8 @@ import com.google.inject.Singleton;
 @Singleton
 @Path("/ws/v2/timeline")
 public class TimelineReaderWebServices {
-  private static final Log LOG =
-      LogFactory.getLog(TimelineReaderWebServices.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TimelineReaderWebServices.class);
 
   @Context private ServletContext ctxt;
 
@@ -199,7 +200,7 @@ public class TimelineReaderWebServices {
    * @return information about the cluster including timeline version.
    */
   @GET
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineAbout about(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res) {
@@ -264,6 +265,15 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entities
+   *     would not contain metric values before this timestamp(Optional query
+   *     param).
+   * @param metricsTimeEnd If specified, returned metrics for the entities would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of entities from the
+   *     given fromId. The set of entities retrieved is inclusive of specified
+   *     fromId. fromId should be taken from the value associated with FROM_ID
+   *     info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances of the given entity type
@@ -276,7 +286,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/app-uid/{uid}/entities/{entitytype}")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getEntities(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -294,7 +304,10 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -317,9 +330,11 @@ public class TimelineReaderWebServices {
       entities = timelineReaderManager.getEntities(context,
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
           limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
-          infofilters, conffilters, metricfilters, eventfilters),
+              infofilters, conffilters, metricfilters, eventfilters,
+              fromId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime,
           "createdTime start/end or limit or flowrunid");
@@ -400,6 +415,15 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entities
+   *     would not contain metric values before this timestamp(Optional query
+   *     param).
+   * @param metricsTimeEnd If specified, returned metrics for the entities would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of entities from the
+   *     given fromId. The set of entities retrieved is inclusive of specified
+   *     fromId. fromId should be taken from the value associated with FROM_ID
+   *     info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances of the given entity type
@@ -414,7 +438,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/apps/{appid}/entities/{entitytype}")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getEntities(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -435,11 +459,15 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     return getEntities(req, res, null, appId, entityType, userId, flowName,
         flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
         isRelatedTo, infofilters, conffilters, metricfilters, eventfilters,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
   }
 
   /**
@@ -510,6 +538,15 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entities
+   *     would not contain metric values before this timestamp(Optional query
+   *     param).
+   * @param metricsTimeEnd If specified, returned metrics for the entities would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of entities from the
+   *     given fromId. The set of entities retrieved is inclusive of specified
+   *     fromId. fromId should be taken from the value associated with FROM_ID
+   *     info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances of the given entity type
@@ -524,7 +561,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/apps/{appid}/entities/{entitytype}")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getEntities(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -546,7 +583,10 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -559,14 +599,17 @@ public class TimelineReaderWebServices {
     TimelineReaderManager timelineReaderManager = getTimelineReaderManager();
     Set<TimelineEntity> entities = null;
     try {
-      entities = timelineReaderManager.getEntities(
-          TimelineReaderWebServicesUtils.createTimelineReaderContext(
-          clusterId, userId, flowName, flowRunId, appId, entityType, null),
+      TimelineReaderContext context = TimelineReaderWebServicesUtils
+          .createTimelineReaderContext(clusterId, userId, flowName, flowRunId,
+              appId, entityType, null, null);
+      entities = timelineReaderManager.getEntities(context,
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
           limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
-          infofilters, conffilters, metricfilters, eventfilters),
+              infofilters, conffilters, metricfilters, eventfilters,
+              fromId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime,
           "createdTime start/end or limit or flowrunid");
@@ -608,6 +651,10 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entity would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the entity would
+   *     not contain metric values after this timestamp(Optional query param).
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -621,7 +668,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/entity-uid/{uid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getEntity(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -629,7 +676,9 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -649,7 +698,8 @@ public class TimelineReaderWebServices {
       }
       entity = timelineReaderManager.getEntity(context,
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -703,6 +753,12 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entity would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the entity would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *     If specified, then entity retrieval will be faster.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -716,7 +772,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/apps/{appid}/entities/{entitytype}/{entityid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getEntity(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -729,10 +785,13 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
     return getEntity(req, res, null, appId, entityType, entityId, userId,
         flowName, flowRunId, confsToRetrieve, metricsToRetrieve, fields,
-        metricsLimit);
+        metricsLimit, metricsTimeStart, metricsTimeEnd, entityIdPrefix);
   }
 
   /**
@@ -774,6 +833,12 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the entity would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the entity would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *     If specified, then entity retrieval will be faster.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -787,7 +852,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/apps/{appid}/entities/{entitytype}/{entityid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getEntity(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -801,7 +866,10 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -816,9 +884,11 @@ public class TimelineReaderWebServices {
     try {
       entity = timelineReaderManager.getEntity(
           TimelineReaderWebServicesUtils.createTimelineReaderContext(
-          clusterId, userId, flowName, flowRunId, appId, entityType, entityId),
+              clusterId, userId, flowName, flowRunId, appId, entityType,
+              entityIdPrefix, entityId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -859,7 +929,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/run-uid/{uid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getFlowRun(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -885,7 +955,7 @@ public class TimelineReaderWebServices {
       context.setEntityType(TimelineEntityType.YARN_FLOW_RUN.toString());
       entity = timelineReaderManager.getEntity(context,
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          null, metricsToRetrieve, null, null));
+          null, metricsToRetrieve, null, null, null, null));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -927,7 +997,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/users/{userid}/flows/{flowname}/runs/{flowrunid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getFlowRun(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -968,7 +1038,7 @@ public class TimelineReaderWebServices {
   @GET
   @Path("/clusters/{clusterid}/users/{userid}/flows/{flowname}/"
       + "runs/{flowrunid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getFlowRun(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -992,9 +1062,9 @@ public class TimelineReaderWebServices {
       entity = timelineReaderManager.getEntity(
           TimelineReaderWebServicesUtils.createTimelineReaderContext(
           clusterId, userId, flowName, flowRunId, null,
-          TimelineEntityType.YARN_FLOW_RUN.toString(), null),
+              TimelineEntityType.YARN_FLOW_RUN.toString(), null, null),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          null, metricsToRetrieve, null, null));
+          null, metricsToRetrieve, null, null, null, null));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -1038,6 +1108,10 @@ public class TimelineReaderWebServices {
    *     METRICS makes sense for flow runs hence only ALL or METRICS are
    *     supported as fields for fetching flow runs. Other fields will lead to
    *     HTTP 400 (Bad Request) response. (Optional query param).
+   * @param fromId If specified, retrieve the next set of flow run entities
+   *     from the given fromId. The set of entities retrieved is inclusive of
+   *     specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     set of <cite>FlowRunEntity</cite> instances for the given flow are
@@ -1050,7 +1124,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/flow-uid/{uid}/runs/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRuns(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1059,7 +1133,8 @@ public class TimelineReaderWebServices {
       @QueryParam("createdtimestart") String createdTimeStart,
       @QueryParam("createdtimeend") String createdTimeEnd,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
-      @QueryParam("fields") String fields) {
+      @QueryParam("fields") String fields,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1081,11 +1156,12 @@ public class TimelineReaderWebServices {
       entities = timelineReaderManager.getEntities(context,
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
           limit, createdTimeStart, createdTimeEnd, null, null, null,
-          null, null, null),
+              null, null, null, fromId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          null, metricsToRetrieve, fields, null));
+          null, metricsToRetrieve, fields, null, null, null));
     } catch (Exception e) {
-      handleException(e, url, startTime, "createdTime start/end or limit");
+      handleException(e, url, startTime,
+          "createdTime start/end or limit or fromId");
     }
     long endTime = Time.monotonicNow();
     if (entities == null) {
@@ -1123,6 +1199,10 @@ public class TimelineReaderWebServices {
    *     METRICS makes sense for flow runs hence only ALL or METRICS are
    *     supported as fields for fetching flow runs. Other fields will lead to
    *     HTTP 400 (Bad Request) response. (Optional query param).
+   * @param fromId If specified, retrieve the next set of flow run entities
+   *     from the given fromId. The set of entities retrieved is inclusive of
+   *     specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     set of <cite>FlowRunEntity</cite> instances for the given flow are
@@ -1135,7 +1215,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/users/{userid}/flows/{flowname}/runs/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRuns(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1145,9 +1225,10 @@ public class TimelineReaderWebServices {
       @QueryParam("createdtimestart") String createdTimeStart,
       @QueryParam("createdtimeend") String createdTimeEnd,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
-      @QueryParam("fields") String fields) {
+      @QueryParam("fields") String fields,
+      @QueryParam("fromid") String fromId) {
     return getFlowRuns(req, res, null, userId, flowName, limit,
-        createdTimeStart, createdTimeEnd, metricsToRetrieve, fields);
+        createdTimeStart, createdTimeEnd, metricsToRetrieve, fields, fromId);
   }
 
   /**
@@ -1178,6 +1259,10 @@ public class TimelineReaderWebServices {
    *     METRICS makes sense for flow runs hence only ALL or METRICS are
    *     supported as fields for fetching flow runs. Other fields will lead to
    *     HTTP 400 (Bad Request) response. (Optional query param).
+   * @param fromId If specified, retrieve the next set of flow run entities
+   *     from the given fromId. The set of entities retrieved is inclusive of
+   *     specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     set of <cite>FlowRunEntity</cite> instances for the given flow are
@@ -1190,7 +1275,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/users/{userid}/flows/{flowname}/runs/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRuns(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1201,7 +1286,8 @@ public class TimelineReaderWebServices {
       @QueryParam("createdtimestart") String createdTimeStart,
       @QueryParam("createdtimeend") String createdTimeEnd,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
-      @QueryParam("fields") String fields) {
+      @QueryParam("fields") String fields,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1217,14 +1303,15 @@ public class TimelineReaderWebServices {
       entities = timelineReaderManager.getEntities(
           TimelineReaderWebServicesUtils.createTimelineReaderContext(
           clusterId, userId, flowName, null, null,
-          TimelineEntityType.YARN_FLOW_RUN.toString(), null),
+              TimelineEntityType.YARN_FLOW_RUN.toString(), null, null),
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
           limit, createdTimeStart, createdTimeEnd, null, null, null,
-          null, null, null),
+              null, null, null, fromId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          null, metricsToRetrieve, fields, null));
+          null, metricsToRetrieve, fields, null, null, null));
     } catch (Exception e) {
-      handleException(e, url, startTime, "createdTime start/end or limit");
+      handleException(e, url, startTime,
+          "createdTime start/end or limit or fromId");
     }
     long endTime = Time.monotonicNow();
     if (entities == null) {
@@ -1260,6 +1347,10 @@ public class TimelineReaderWebServices {
    *     2 dates.
    *     "daterange=20150711-" returns flows active on and after 20150711.
    *     "daterange=-20150711" returns flows active on and before 20150711.
+   * @param fromId If specified, retrieve the next set of flows from the given
+   *     fromId. The set of flows retrieved is inclusive of specified fromId.
+   *     fromId should be taken from the value associated with FROM_ID info key
+   *     in flow entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     set of <cite>FlowActivityEntity</cite> instances are returned.<br>
@@ -1271,13 +1362,14 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/flows/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlows(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
       @QueryParam("limit") String limit,
-      @QueryParam("daterange") String dateRange) {
-    return getFlows(req, res, null, limit, dateRange);
+      @QueryParam("daterange") String dateRange,
+      @QueryParam("fromid") String fromId) {
+    return getFlows(req, res, null, limit, dateRange, fromId);
   }
 
   /**
@@ -1306,6 +1398,10 @@ public class TimelineReaderWebServices {
    *     2 dates.
    *     "daterange=20150711-" returns flows active on and after 20150711.
    *     "daterange=-20150711" returns flows active on and before 20150711.
+   * @param fromId If specified, retrieve the next set of flows from the given
+   *     fromId. The set of flows retrieved is inclusive of specified fromId.
+   *     fromId should be taken from the value associated with FROM_ID info key
+   *     in flow entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     set of <cite>FlowActivityEntity</cite> instances are returned.<br>
@@ -1317,13 +1413,14 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/flows/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlows(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
       @PathParam("clusterid") String clusterId,
       @QueryParam("limit") String limit,
-      @QueryParam("daterange") String dateRange) {
+      @QueryParam("daterange") String dateRange,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1339,15 +1436,14 @@ public class TimelineReaderWebServices {
       DateRange range = parseDateRange(dateRange);
       TimelineEntityFilters entityFilters =
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
-          limit, null, null, null, null, null, null, null, null);
-      entityFilters.setCreatedTimeBegin(range.dateStart);
-      entityFilters.setCreatedTimeEnd(range.dateEnd);
+              limit, range.dateStart, range.dateEnd,
+              null, null, null, null, null, null, fromId);
       entities = timelineReaderManager.getEntities(
           TimelineReaderWebServicesUtils.createTimelineReaderContext(
           clusterId, null, null, null, null,
-          TimelineEntityType.YARN_FLOW_ACTIVITY.toString(), null),
+              TimelineEntityType.YARN_FLOW_ACTIVITY.toString(), null, null),
           entityFilters, TimelineReaderWebServicesUtils.
-          createTimelineDataToRetrieve(null, null, null, null));
+              createTimelineDataToRetrieve(null, null, null, null, null, null));
     } catch (Exception e) {
       handleException(e, url, startTime, "limit");
     }
@@ -1388,6 +1484,10 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -1401,7 +1501,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/app-uid/{uid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getApp(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1409,7 +1509,9 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1430,7 +1532,8 @@ public class TimelineReaderWebServices {
       context.setEntityType(TimelineEntityType.YARN_APPLICATION.toString());
       entity = timelineReaderManager.getEntity(context,
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -1479,6 +1582,10 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the app would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app would
+   *     not contain metric values after this timestamp(Optional query param).
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -1492,7 +1599,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/apps/{appid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getApp(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1503,9 +1610,12 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd) {
     return getApp(req, res, null, appId, flowName, flowRunId, userId,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd);
   }
 
   /**
@@ -1543,6 +1653,10 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the app would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app would
+   *     not contain metric values after this timestamp(Optional query param).
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing a
    *     <cite>TimelineEntity</cite> instance is returned.<br>
@@ -1556,7 +1670,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/apps/{appid}/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public TimelineEntity getApp(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1568,7 +1682,9 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1584,9 +1700,10 @@ public class TimelineReaderWebServices {
       entity = timelineReaderManager.getEntity(
           TimelineReaderWebServicesUtils.createTimelineReaderContext(
           clusterId, userId, flowName, flowRunId, appId,
-          TimelineEntityType.YARN_APPLICATION.toString(), null),
+              TimelineEntityType.YARN_APPLICATION.toString(), null, null),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime, "flowrunid");
     }
@@ -1659,6 +1776,14 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of applications
+   *     from the given fromId. The set of applications retrieved is inclusive
+   *     of specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances representing apps is
@@ -1671,7 +1796,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/run-uid/{uid}/apps")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRunApps(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1688,7 +1813,10 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     String url = req.getRequestURI() +
         (req.getQueryString() == null ? "" :
             QUERY_STRING_SEP + req.getQueryString());
@@ -1710,9 +1838,11 @@ public class TimelineReaderWebServices {
       entities = timelineReaderManager.getEntities(context,
           TimelineReaderWebServicesUtils.createTimelineEntityFilters(
           limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
-          infofilters, conffilters, metricfilters, eventfilters),
+              infofilters, conffilters, metricfilters, eventfilters,
+              fromId),
           TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
-          confsToRetrieve, metricsToRetrieve, fields, metricsLimit));
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
     } catch (Exception e) {
       handleException(e, url, startTime,
           "createdTime start/end or limit or flowrunid");
@@ -1786,6 +1916,14 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of applications
+   *     from the given fromId. The set of applications retrieved is inclusive
+   *     of specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances representing apps is
@@ -1798,7 +1936,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/users/{userid}/flows/{flowname}/runs/{flowrunid}/apps/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRunApps(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1817,12 +1955,16 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     return getEntities(req, res, null, null,
         TimelineEntityType.YARN_APPLICATION.toString(), userId, flowName,
         flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
         isRelatedTo, infofilters, conffilters, metricfilters, eventfilters,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
   }
 
   /**
@@ -1886,6 +2028,14 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of applications
+   *     from the given fromId. The set of applications retrieved is inclusive
+   *     of specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances representing apps is
@@ -1899,7 +2049,7 @@ public class TimelineReaderWebServices {
   @GET
   @Path("/clusters/{clusterid}/users/{userid}/flows/{flowname}/runs/"
       + "{flowrunid}/apps/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowRunApps(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -1919,12 +2069,16 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     return getEntities(req, res, clusterId, null,
         TimelineEntityType.YARN_APPLICATION.toString(), userId, flowName,
         flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
         isRelatedTo, infofilters, conffilters, metricfilters, eventfilters,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
   }
 
   /**
@@ -1985,6 +2139,14 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of applications
+   *     from the given fromId. The set of applications retrieved is inclusive
+   *     of specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances representing apps is
@@ -1997,7 +2159,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/users/{userid}/flows/{flowname}/apps/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowApps(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -2015,12 +2177,16 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     return getEntities(req, res, null, null,
         TimelineEntityType.YARN_APPLICATION.toString(), userId, flowName,
         null, limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
         infofilters, conffilters, metricfilters, eventfilters,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
   }
 
   /**
@@ -2082,6 +2248,14 @@ public class TimelineReaderWebServices {
    *     or has a value less than 1, and metrics have to be retrieved, then
    *     metricsLimit will be considered as 1 i.e. latest single value of
    *     metric(s) will be returned. (Optional query param).
+   * @param metricsTimeStart If specified, returned metrics for the apps would
+   *     not contain metric values before this timestamp(Optional query param).
+   * @param metricsTimeEnd If specified, returned metrics for the apps would
+   *     not contain metric values after this timestamp(Optional query param).
+   * @param fromId If specified, retrieve the next set of applications
+   *     from the given fromId. The set of applications retrieved is inclusive
+   *     of specified fromId. fromId should be taken from the value associated
+   *     with FROM_ID info key in entity response which was sent earlier.
    *
    * @return If successful, a HTTP 200(OK) response having a JSON representing
    *     a set of <cite>TimelineEntity</cite> instances representing apps is
@@ -2094,7 +2268,7 @@ public class TimelineReaderWebServices {
    */
   @GET
   @Path("/clusters/{clusterid}/users/{userid}/flows/{flowname}/apps/")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
   public Set<TimelineEntity> getFlowApps(
       @Context HttpServletRequest req,
       @Context HttpServletResponse res,
@@ -2113,11 +2287,1120 @@ public class TimelineReaderWebServices {
       @QueryParam("confstoretrieve") String confsToRetrieve,
       @QueryParam("metricstoretrieve") String metricsToRetrieve,
       @QueryParam("fields") String fields,
-      @QueryParam("metricslimit") String metricsLimit) {
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
     return getEntities(req, res, clusterId, null,
         TimelineEntityType.YARN_APPLICATION.toString(), userId, flowName,
         null, limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
         infofilters, conffilters, metricfilters, eventfilters,
-        confsToRetrieve, metricsToRetrieve, fields, metricsLimit);
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
+  }
+
+  /**
+   * Return a set of application-attempt entities for a given applicationId.
+   * Cluster ID is not provided by client so default cluster ID has to be taken.
+   * If userid, flow name and flowrun id which are optional query parameters are
+   * not specified, they will be queried based on app id and default cluster id
+   * from the flow context information stored in underlying storage
+   * implementation. If number of matching entities are more than the limit,
+   * most recent entities till the limit is reached, will be returned.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param appId Application id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param userId User id which should match for the entities(Optional query
+   *          param)
+   * @param flowName Flow name which should match for the entities(Optional
+   *          query param).
+   * @param flowRunId Run id which should match for the entities(Optional query
+   *          param).
+   * @param limit If specified, defines the number of entities to return. The
+   *          maximum possible value for limit can be {@link Long#MAX_VALUE}. If
+   *          it is not specified or has a value less than 0, then limit will be
+   *          considered as 100. (Optional query param).
+   * @param createdTimeStart If specified, matched entities should not be
+   *          created before this timestamp(Optional query param).
+   * @param createdTimeEnd If specified, matched entities should not be created
+   *          after this timestamp(Optional query param).
+   * @param relatesTo If specified, matched entities should relate to given
+   *          entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param isRelatedTo If specified, matched entities should be related to
+   *          given entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param infofilters If specified, matched entities should have exact matches
+   *          to the given info represented as key-value pairs. This is
+   *          represented as infofilters=info1:value1,info2:value2... (Optional
+   *          query param).
+   * @param conffilters If specified, matched entities should have exact matches
+   *          to the given configs represented as key-value pairs. This is
+   *          represented as conffilters=conf1:value1,conf2:value2... (Optional
+   *          query param).
+   * @param metricfilters If specified, matched entities should contain the
+   *          given metrics. This is represented as metricfilters=metricid1,
+   *          metricid2... (Optional query param).
+   * @param eventfilters If specified, matched entities should contain the given
+   *          events. This is represented as eventfilters=eventid1, eventid2...
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the app attempts
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app attempts
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param fromId If specified, retrieve the next set of application-attempt
+   *         entities from the given fromId. The set of application-attempt
+   *         entities retrieved is inclusive of specified fromId. fromId should
+   *         be taken from the value associated with FROM_ID info key in
+   *         entity response which was sent earlier.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         set of <cite>TimelineEntity</cite> instances of the app-attempt
+   *         entity type is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved, HTTP 404(Not
+   *         Found) is returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/apps/{appid}/appattempts")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<TimelineEntity> getAppAttempts(@Context HttpServletRequest req,
+      @Context HttpServletResponse res, @PathParam("appid") String appId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+
+    return getAppAttempts(req, res, null, appId, userId, flowName, flowRunId,
+        limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
+        infofilters, conffilters, metricfilters, eventfilters, confsToRetrieve,
+        metricsToRetrieve, fields, metricsLimit, metricsTimeStart,
+        metricsTimeEnd, fromId);
+  }
+
+  /**
+   * Return a set of application-attempt entities for a given applicationId. If
+   * userid, flow name and flowrun id which are optional query parameters are
+   * not specified, they will be queried based on app id and cluster id from the
+   * flow context information stored in underlying storage implementation. If
+   * number of matching entities are more than the limit, most recent entities
+   * till the limit is reached, will be returned.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param clusterId Cluster id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param appId Application id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param userId User id which should match for the entities(Optional query
+   *          param)
+   * @param flowName Flow name which should match for the entities(Optional
+   *          query param).
+   * @param flowRunId Run id which should match for the entities(Optional query
+   *          param).
+   * @param limit If specified, defines the number of entities to return. The
+   *          maximum possible value for limit can be {@link Long#MAX_VALUE}. If
+   *          it is not specified or has a value less than 0, then limit will be
+   *          considered as 100. (Optional query param).
+   * @param createdTimeStart If specified, matched entities should not be
+   *          created before this timestamp(Optional query param).
+   * @param createdTimeEnd If specified, matched entities should not be created
+   *          after this timestamp(Optional query param).
+   * @param relatesTo If specified, matched entities should relate to given
+   *          entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param isRelatedTo If specified, matched entities should be related to
+   *          given entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param infofilters If specified, matched entities should have exact matches
+   *          to the given info represented as key-value pairs. This is
+   *          represented as infofilters=info1:value1,info2:value2... (Optional
+   *          query param).
+   * @param conffilters If specified, matched entities should have exact matches
+   *          to the given configs represented as key-value pairs. This is
+   *          represented as conffilters=conf1:value1,conf2:value2... (Optional
+   *          query param).
+   * @param metricfilters If specified, matched entities should contain the
+   *          given metrics. This is represented as metricfilters=metricid1,
+   *          metricid2... (Optional query param).
+   * @param eventfilters If specified, matched entities should contain the given
+   *          events. This is represented as eventfilters=eventid1, eventid2...
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the app attempts
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app attempts
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param fromId If specified, retrieve the next set of application-attempt
+   *         entities from the given fromId. The set of application-attempt
+   *         entities retrieved is inclusive of specified fromId. fromId should
+   *         be taken from the value associated with FROM_ID info key in
+   *         entity response which was sent earlier.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         set of <cite>TimelineEntity</cite> instances of the app-attempts
+   *         entity type is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved, HTTP 404(Not
+   *         Found) is returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/clusters/{clusterid}/apps/{appid}/appattempts")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<TimelineEntity> getAppAttempts(@Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("appid") String appId, @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+
+    return getEntities(req, res, clusterId, appId,
+        TimelineEntityType.YARN_APPLICATION_ATTEMPT.toString(), userId,
+        flowName, flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
+        isRelatedTo, infofilters, conffilters, metricfilters, eventfilters,
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
+  }
+
+  /**
+   * Return a single application-attempt entity for the given attempt Id.
+   * Cluster ID is not provided by client so default cluster ID has to be taken.
+   * If userid, flow name and flowrun id which are optional query parameters are
+   * not specified, they will be queried based on app id and default cluster id
+   * from the flow context information stored in underlying storage
+   * implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param appId Application id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param appAttemptId Application Attempt Id to which the containers belong
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entity(Optional query
+   *          param).
+   * @param flowName Flow name which should match for the entity(Optional query
+   *          param).
+   * @param flowRunId Run id which should match for the entity(Optional query
+   *          param).
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the app attempt
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app attempt
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *          If specified, then entity retrieval will be faster.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         <cite>TimelineEntity</cite> instance is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved or entity for the
+   *         given entity id cannot be found, HTTP 404(Not Found) is
+   *         returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/apps/{appid}/appattempts/{appattemptid}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public TimelineEntity getAppAttempt(@Context HttpServletRequest req,
+      @Context HttpServletResponse res, @PathParam("appid") String appId,
+      @PathParam("appattemptid") String appAttemptId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    return getAppAttempt(req, res, null, appId, appAttemptId, userId, flowName,
+        flowRunId, confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, entityIdPrefix);
+  }
+
+  /**
+   * Return a single application attempt entity of the given entity Id. If
+   * userid, flowname and flowrun id which are optional query parameters are not
+   * specified, they will be queried based on app id and cluster id from the
+   * flow context information stored in underlying storage implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param clusterId Cluster id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param appId Application id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param appAttemptId Application Attempt Id to which the containers belong
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entity(Optional query
+   *          param).
+   * @param flowName Flow name which should match for the entity(Optional query
+   *          param).
+   * @param flowRunId Run id which should match for the entity(Optional query
+   *          param).
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id and created time is
+   *          returned (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the app attempt
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the app attempt
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *          If specified, then entity retrieval will be faster.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         <cite>TimelineEntity</cite> instance is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved or entity for the
+   *         given entity id cannot be found, HTTP 404(Not Found) is
+   *         returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/clusters/{clusterid}/apps/{appid}/appattempts/{appattemptid}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public TimelineEntity getAppAttempt(@Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("appid") String appId,
+      @PathParam("appattemptid") String appAttemptId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    return getEntity(req, res, clusterId, appId,
+        TimelineEntityType.YARN_APPLICATION_ATTEMPT.toString(), appAttemptId,
+        userId, flowName, flowRunId, confsToRetrieve, metricsToRetrieve, fields,
+        metricsLimit, metricsTimeStart, metricsTimeEnd, entityIdPrefix);
+  }
+
+  /**
+   * Return a set of container entities belonging to given application attempt
+   * id. Cluster ID is not provided by client so default cluster ID has to be
+   * taken. If userid, flow name and flowrun id which are optional query
+   * parameters are not specified, they will be queried based on app id and
+   * default cluster id from the flow context information stored in underlying
+   * storage implementation. If number of matching entities are more than the
+   * limit, most recent entities till the limit is reached, will be returned.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param appId Application id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param appattemptId Application Attempt Id to which the containers belong
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entities(Optional query
+   *          param)
+   * @param flowName Flow name which should match for the entities(Optional
+   *          query param).
+   * @param flowRunId Run id which should match for the entities(Optional query
+   *          param).
+   * @param limit If specified, defines the number of entities to return. The
+   *          maximum possible value for limit can be {@link Long#MAX_VALUE}. If
+   *          it is not specified or has a value less than 0, then limit will be
+   *          considered as 100. (Optional query param).
+   * @param createdTimeStart If specified, matched entities should not be
+   *          created before this timestamp(Optional query param).
+   * @param createdTimeEnd If specified, matched entities should not be created
+   *          after this timestamp(Optional query param).
+   * @param relatesTo If specified, matched entities should relate to given
+   *          entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param isRelatedTo If specified, matched entities should be related to
+   *          given entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param infofilters If specified, matched entities should have exact matches
+   *          to the given info represented as key-value pairs. This is
+   *          represented as infofilters=info1:value1,info2:value2... (Optional
+   *          query param).
+   * @param conffilters If specified, matched entities should have exact matches
+   *          to the given configs represented as key-value pairs. This is
+   *          represented as conffilters=conf1:value1,conf2:value2... (Optional
+   *          query param).
+   * @param metricfilters If specified, matched entities should contain the
+   *          given metrics. This is represented as metricfilters=metricid1,
+   *          metricid2... (Optional query param).
+   * @param eventfilters If specified, matched entities should contain the given
+   *          events. This is represented as eventfilters=eventid1, eventid2...
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the containers
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the containers
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param fromId If specified, retrieve the next set of container
+   *         entities from the given fromId. The set of container
+   *         entities retrieved is inclusive of specified fromId. fromId should
+   *         be taken from the value associated with FROM_ID info key in
+   *         entity response which was sent earlier.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         set of <cite>TimelineEntity</cite> instances of the containers
+   *         belongs to given application attempt id.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved, HTTP 404(Not
+   *         Found) is returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/apps/{appid}/appattempts/{appattemptid}/containers")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<TimelineEntity> getContainers(@Context HttpServletRequest req,
+      @Context HttpServletResponse res, @PathParam("appid") String appId,
+      @PathParam("appattemptid") String appattemptId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+    return getContainers(req, res, null, appId, appattemptId, userId, flowName,
+        flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
+        isRelatedTo, infofilters, conffilters, metricfilters, eventfilters,
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
+  }
+
+  /**
+   * Return a set of container entities belonging to given application attempt
+   * id. If userid, flow name and flowrun id which are optional query parameters
+   * are not specified, they will be queried based on app id and cluster id from
+   * the flow context information stored in underlying storage implementation.
+   * If number of matching entities are more than the limit, most recent
+   * entities till the limit is reached, will be returned.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param clusterId Cluster id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param appId Application id to which the entities to be queried belong to(
+   *          Mandatory path param).
+   * @param appattemptId Application Attempt Id to which the containers belong
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entities(Optional query
+   *          param)
+   * @param flowName Flow name which should match for the entities(Optional
+   *          query param).
+   * @param flowRunId Run id which should match for the entities(Optional query
+   *          param).
+   * @param limit If specified, defines the number of entities to return. The
+   *          maximum possible value for limit can be {@link Long#MAX_VALUE}. If
+   *          it is not specified or has a value less than 0, then limit will be
+   *          considered as 100. (Optional query param).
+   * @param createdTimeStart If specified, matched entities should not be
+   *          created before this timestamp(Optional query param).
+   * @param createdTimeEnd If specified, matched entities should not be created
+   *          after this timestamp(Optional query param).
+   * @param relatesTo If specified, matched entities should relate to given
+   *          entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param isRelatedTo If specified, matched entities should be related to
+   *          given entities associated with a entity type. relatesto is a comma
+   *          separated list in the format
+   *          [entitytype]:[entityid1]:[entityid2]... (Optional query param).
+   * @param infofilters If specified, matched entities should have exact matches
+   *          to the given info represented as key-value pairs. This is
+   *          represented as infofilters=info1:value1,info2:value2... (Optional
+   *          query param).
+   * @param conffilters If specified, matched entities should have exact matches
+   *          to the given configs represented as key-value pairs. This is
+   *          represented as conffilters=conf1:value1,conf2:value2... (Optional
+   *          query param).
+   * @param metricfilters If specified, matched entities should contain the
+   *          given metrics. This is represented as metricfilters=metricid1,
+   *          metricid2... (Optional query param).
+   * @param eventfilters If specified, matched entities should contain the given
+   *          events. This is represented as eventfilters=eventid1, eventid2...
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the containers
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the containers
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param fromId If specified, retrieve the next set of container
+   *         entities from the given fromId. The set of container
+   *         entities retrieved is inclusive of specified fromId. fromId should
+   *         be taken from the value associated with FROM_ID info key in
+   *         entity response which was sent earlier.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         set of <cite>TimelineEntity</cite> instances of the containers
+   *         belongs to given application attempt id.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved, HTTP 404(Not
+   *         Found) is returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/clusters/{clusterid}/apps/{appid}/appattempts/{appattemptid}/containers")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<TimelineEntity> getContainers(@Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("appid") String appId,
+      @PathParam("appattemptid") String appattemptId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+
+    String entityType = TimelineEntityType.YARN_CONTAINER.toString();
+    String parentEntityType =
+        TimelineEntityType.YARN_APPLICATION_ATTEMPT.toString();
+    String jsonFormatString = "{\"type\":\"" + parentEntityType + "\",\"id\":\""
+        + appattemptId + "\"}";
+    String containerFilters =
+        "SYSTEM_INFO_PARENT_ENTITY eq " + jsonFormatString;
+    String infofilter;
+    if (infofilters != null) {
+      infofilter = containerFilters + " AND " + infofilters;
+    } else {
+      infofilter = containerFilters;
+    }
+    return getEntities(req, res, clusterId, appId, entityType, userId, flowName,
+        flowRunId, limit, createdTimeStart, createdTimeEnd, relatesTo,
+        isRelatedTo, infofilter, conffilters, metricfilters, eventfilters,
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, fromId);
+  }
+
+  /**
+   * Return a single container entity for the given container Id. Cluster ID is
+   * not provided by client so default cluster ID has to be taken. If userid,
+   * flow name and flowrun id which are optional query parameters are not
+   * specified, they will be queried based on app id and default cluster id from
+   * the flow context information stored in underlying storage implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param appId Application id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param containerId Container Id to which the entity to be queried belongs
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entity(Optional query
+   *          param).
+   * @param flowName Flow name which should match for the entity(Optional query
+   *          param).
+   * @param flowRunId Run id which should match for the entity(Optional query
+   *          param).
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id, created time is returned
+   *          (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the container
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the container
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *          If specified, then entity retrieval will be faster.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing
+   *         <cite>TimelineEntity</cite> instance is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved or entity for the
+   *         given entity id cannot be found, HTTP 404(Not Found) is
+   *         returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/apps/{appid}/containers/{containerid}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public TimelineEntity getContainer(@Context HttpServletRequest req,
+      @Context HttpServletResponse res, @PathParam("appid") String appId,
+      @PathParam("containerid") String containerId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    return getContainer(req, res, null, appId, containerId, userId, flowName,
+        flowRunId, confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        entityIdPrefix, metricsTimeStart, metricsTimeEnd);
+  }
+
+  /**
+   * Return a single container entity for the given container Id. If userid,
+   * flowname and flowrun id which are optional query parameters are not
+   * specified, they will be queried based on app id and cluster id from the
+   * flow context information stored in underlying storage implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param clusterId Cluster id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param appId Application id to which the entity to be queried belongs to(
+   *          Mandatory path param).
+   * @param containerId Container Id to which the entity to be queried belongs
+   *          to( Mandatory path param).
+   * @param userId User id which should match for the entity(Optional query
+   *          param).
+   * @param flowName Flow name which should match for the entity(Optional query
+   *          param).
+   * @param flowRunId Run id which should match for the entity(Optional query
+   *          param).
+   * @param confsToRetrieve If specified, defines which configurations to
+   *          retrieve and send back in response. These configs will be
+   *          retrieved irrespective of whether configs are specified in fields
+   *          to retrieve or not.
+   * @param metricsToRetrieve If specified, defines which metrics to retrieve
+   *          and send back in response. These metrics will be retrieved
+   *          irrespective of whether metrics are specified in fields to
+   *          retrieve or not.
+   * @param fields Specifies which fields of the entity object to retrieve, see
+   *          {@link Field}. All fields will be retrieved if fields=ALL. If not
+   *          specified, 3 fields i.e. entity type, id and created time is
+   *          returned (Optional query param).
+   * @param metricsLimit If specified, defines the number of metrics to return.
+   *          Considered only if fields contains METRICS/ALL or
+   *          metricsToRetrieve is specified. Ignored otherwise. The maximum
+   *          possible value for metricsLimit can be {@link Integer#MAX_VALUE}.
+   *          If it is not specified or has a value less than 1, and metrics
+   *          have to be retrieved, then metricsLimit will be considered as 1
+   *          i.e. latest single value of metric(s) will be returned. (Optional
+   *          query param).
+   * @param metricsTimeStart If specified, returned metrics for the container
+   *          would not contain metric values before this timestamp(Optional
+   *          query param).
+   * @param metricsTimeEnd If specified, returned metrics for the container
+   *          would not contain metric values after this timestamp(Optional
+   *          query param).
+   * @param entityIdPrefix Defines the id prefix for the entity to be fetched.
+   *          If specified, then entity retrieval will be faster.
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *         <cite>TimelineEntity</cite> instance is returned.<br>
+   *         On failures,<br>
+   *         If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *         returned.<br>
+   *         If flow context information cannot be retrieved or entity for the
+   *         given entity id cannot be found, HTTP 404(Not Found) is
+   *         returned.<br>
+   *         For all other errors while retrieving data, HTTP 500(Internal
+   *         Server Error) is returned.
+   */
+  @GET
+  @Path("/clusters/{clusterid}/apps/{appid}/containers/{containerid}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public TimelineEntity getContainer(@Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("appid") String appId,
+      @PathParam("containerid") String containerId,
+      @QueryParam("userid") String userId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    return getEntity(req, res, clusterId, appId,
+        TimelineEntityType.YARN_CONTAINER.toString(), containerId, userId,
+        flowName, flowRunId, confsToRetrieve, metricsToRetrieve, fields,
+        metricsLimit, metricsTimeStart, metricsTimeEnd, entityIdPrefix);
+  }
+
+  /**
+   * Returns a set of available entity types for a given app id. Cluster ID is
+   * not provided by client so default cluster ID has to be taken. If userid,
+   * flow name and flow run id which are optional query parameters are not
+   * specified, they will be queried based on app id and cluster id from the
+   * flow context information stored in underlying storage implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param appId Application id to be queried(Mandatory path param).
+   * @param flowName Flow name which should match for the app(Optional query
+   *     param).
+   * @param flowRunId Run id which should match for the app(Optional query
+   *     param).
+   * @param userId User id which should match for the app(Optional query param).
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *     list contains all timeline entity types is returned.<br>
+   *     On failures,<br>
+   *     If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *     returned.<br>
+   *     If flow context information cannot be retrieved or app for the given
+   *     app id cannot be found, HTTP 404(Not Found) is returned.<br>
+   *     For all other errors while retrieving data, HTTP 500(Internal Server
+   *     Error) is returned.
+   */
+  @GET
+  @Path("/apps/{appid}/entity-types")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<String> getEntityTypes(
+      @Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("appid") String appId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("userid") String userId) {
+    return getEntityTypes(req, res, null, appId, flowName, flowRunId, userId);
+  }
+
+  /**
+   * Returns a set of available entity types for a given app id. If userid,
+   * flow name and flow run id which are optional query parameters are not
+   * specified, they will be queried based on app id and cluster id from the
+   * flow context information stored in underlying storage implementation.
+   *
+   * @param req Servlet request.
+   * @param res Servlet response.
+   * @param clusterId Cluster id to which the app to be queried belong to(
+   *     Mandatory path param).
+   * @param appId Application id to be queried(Mandatory path param).
+   * @param flowName Flow name which should match for the app(Optional query
+   *     param).
+   * @param flowRunId Run id which should match for the app(Optional query
+   *     param).
+   * @param userId User id which should match for the app(Optional query param).
+   *
+   * @return If successful, a HTTP 200(OK) response having a JSON representing a
+   *     list contains all timeline entity types is returned.<br>
+   *     On failures,<br>
+   *     If any problem occurs in parsing request, HTTP 400(Bad Request) is
+   *     returned.<br>
+   *     If flow context information cannot be retrieved or app for the given
+   *     app id cannot be found, HTTP 404(Not Found) is returned.<br>
+   *     For all other errors while retrieving data, HTTP 500(Internal Server
+   *     Error) is returned.
+   */
+  @GET
+  @Path("/clusters/{clusterid}/apps/{appid}/entity-types")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Set<String> getEntityTypes(
+      @Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("appid") String appId,
+      @QueryParam("flowname") String flowName,
+      @QueryParam("flowrunid") String flowRunId,
+      @QueryParam("userid") String userId) {
+    String url = req.getRequestURI() +
+        (req.getQueryString() == null ? "" :
+            QUERY_STRING_SEP + req.getQueryString());
+    UserGroupInformation callerUGI =
+        TimelineReaderWebServicesUtils.getUser(req);
+    LOG.info("Received URL " + url + " from user " +
+        TimelineReaderWebServicesUtils.getUserName(callerUGI));
+    long startTime = Time.monotonicNow();
+    init(res);
+    TimelineReaderManager timelineReaderManager = getTimelineReaderManager();
+    Set<String> results = null;
+    try {
+      results = timelineReaderManager.getEntityTypes(
+          TimelineReaderWebServicesUtils.createTimelineReaderContext(
+          clusterId, userId, flowName, flowRunId, appId,
+              null, null, null));
+    } catch (Exception e) {
+      handleException(e, url, startTime, "flowrunid");
+    }
+    long endTime = Time.monotonicNow();
+    LOG.info("Processed URL " + url +
+        " (Took " + (endTime - startTime) + " ms.)");
+    return results;
+  }
+
+  @GET
+  @Path("/users/{userid}/entities/{entitytype}")
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
+  public Set<TimelineEntity> getSubAppEntities(
+      @Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("userid") String userId,
+      @PathParam("entitytype") String entityType,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+    return getSubAppEntities(req, res, null, userId, entityType, limit,
+        createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo, infofilters,
+        conffilters, metricfilters, eventfilters, confsToRetrieve,
+        metricsToRetrieve, fields, metricsLimit, metricsTimeStart,
+        metricsTimeEnd, fromId);
+  }
+
+  @GET
+  @Path("/clusters/{clusterid}/users/{userid}/entities/{entitytype}")
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
+  public Set<TimelineEntity> getSubAppEntities(
+      @Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("userid") String userId,
+      @PathParam("entitytype") String entityType,
+      @QueryParam("limit") String limit,
+      @QueryParam("createdtimestart") String createdTimeStart,
+      @QueryParam("createdtimeend") String createdTimeEnd,
+      @QueryParam("relatesto") String relatesTo,
+      @QueryParam("isrelatedto") String isRelatedTo,
+      @QueryParam("infofilters") String infofilters,
+      @QueryParam("conffilters") String conffilters,
+      @QueryParam("metricfilters") String metricfilters,
+      @QueryParam("eventfilters") String eventfilters,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("fromid") String fromId) {
+    String url = req.getRequestURI() +
+        (req.getQueryString() == null ? "" :
+            QUERY_STRING_SEP + req.getQueryString());
+    UserGroupInformation callerUGI =
+        TimelineReaderWebServicesUtils.getUser(req);
+    LOG.info("Received URL " + url + " from user " +
+        TimelineReaderWebServicesUtils.getUserName(callerUGI));
+    long startTime = Time.monotonicNow();
+    init(res);
+    TimelineReaderManager timelineReaderManager = getTimelineReaderManager();
+    Set<TimelineEntity> entities = null;
+    try {
+      TimelineReaderContext context =
+          TimelineReaderWebServicesUtils.createTimelineReaderContext(clusterId,
+              null, null, null, null, entityType, null, null, userId);
+      entities = timelineReaderManager.getEntities(context,
+          TimelineReaderWebServicesUtils.createTimelineEntityFilters(
+          limit, createdTimeStart, createdTimeEnd, relatesTo, isRelatedTo,
+              infofilters, conffilters, metricfilters, eventfilters,
+              fromId),
+          TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
+          confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+          metricsTimeStart, metricsTimeEnd));
+    } catch (Exception e) {
+      handleException(e, url, startTime,
+          "createdTime start/end or limit");
+    }
+    long endTime = Time.monotonicNow();
+    if (entities == null) {
+      entities = Collections.emptySet();
+    }
+    LOG.info("Processed URL " + url +
+        " (Took " + (endTime - startTime) + " ms.)");
+    return entities;
+  }
+
+  @GET
+  @Path("/users/{userid}/entities/{entitytype}/{entityid}")
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
+  public Set<TimelineEntity> getSubAppEntities(@Context HttpServletRequest req,
+      @Context HttpServletResponse res, @PathParam("userid") String userId,
+      @PathParam("entitytype") String entityType,
+      @PathParam("entityid") String entityId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    return getSubAppEntities(req, res, null, userId, entityType, entityId,
+        confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+        metricsTimeStart, metricsTimeEnd, entityIdPrefix);
+  }
+
+  @GET
+  @Path("/clusters/{clusterid}/users/{userid}/entities/{entitytype}/{entityid}")
+  @Produces(MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8)
+  public Set<TimelineEntity> getSubAppEntities(@Context HttpServletRequest req,
+      @Context HttpServletResponse res,
+      @PathParam("clusterid") String clusterId,
+      @PathParam("userid") String userId,
+      @PathParam("entitytype") String entityType,
+      @PathParam("entityid") String entityId,
+      @QueryParam("confstoretrieve") String confsToRetrieve,
+      @QueryParam("metricstoretrieve") String metricsToRetrieve,
+      @QueryParam("fields") String fields,
+      @QueryParam("metricslimit") String metricsLimit,
+      @QueryParam("metricstimestart") String metricsTimeStart,
+      @QueryParam("metricstimeend") String metricsTimeEnd,
+      @QueryParam("entityidprefix") String entityIdPrefix) {
+    String url = req.getRequestURI() + (req.getQueryString() == null ? ""
+        : QUERY_STRING_SEP + req.getQueryString());
+    UserGroupInformation callerUGI =
+        TimelineReaderWebServicesUtils.getUser(req);
+    LOG.info("Received URL " + url + " from user "
+        + TimelineReaderWebServicesUtils.getUserName(callerUGI));
+    long startTime = Time.monotonicNow();
+    init(res);
+    TimelineReaderManager timelineReaderManager = getTimelineReaderManager();
+    Set<TimelineEntity> entities = null;
+    try {
+      TimelineReaderContext context = TimelineReaderWebServicesUtils
+          .createTimelineReaderContext(clusterId, null, null, null, null,
+              entityType, entityIdPrefix, entityId, userId);
+      entities = timelineReaderManager.getEntities(context,
+          new TimelineEntityFilters.Builder().build(),
+          TimelineReaderWebServicesUtils.createTimelineDataToRetrieve(
+              confsToRetrieve, metricsToRetrieve, fields, metricsLimit,
+              metricsTimeStart, metricsTimeEnd));
+    } catch (Exception e) {
+      handleException(e, url, startTime, "");
+    }
+    long endTime = Time.monotonicNow();
+    if (entities == null) {
+      entities = Collections.emptySet();
+    }
+    LOG.info(
+        "Processed URL " + url + " (Took " + (endTime - startTime) + " ms.)");
+    return entities;
   }
 }

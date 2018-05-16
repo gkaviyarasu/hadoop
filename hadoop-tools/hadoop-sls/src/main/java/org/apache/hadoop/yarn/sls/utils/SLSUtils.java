@@ -22,12 +22,16 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.conf.Configuration;
@@ -37,12 +41,16 @@ import org.apache.hadoop.tools.rumen.JobTraceReader;
 import org.apache.hadoop.tools.rumen.LoggedJob;
 import org.apache.hadoop.tools.rumen.LoggedTask;
 import org.apache.hadoop.tools.rumen.LoggedTaskAttempt;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.map.ObjectMapper;
+import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.ResourceInformation;
+import org.apache.hadoop.yarn.sls.conf.SLSConfiguration;
+import org.apache.hadoop.yarn.util.resource.ResourceUtils;
+import org.apache.hadoop.yarn.util.resource.Resources;
 
 @Private
 @Unstable
 public class SLSUtils {
+  public final static String DEFAULT_JOB_TYPE = "mapreduce";
 
   // hostname includes the network path and the host name. for example
   // "/default-rack/hostFoo" or "/coreSwitchA/TORSwitchB/hostBar".
@@ -100,22 +108,15 @@ public class SLSUtils {
    */
   public static Set<String> parseNodesFromSLSTrace(String jobTrace)
           throws IOException {
-    Set<String> nodeSet = new HashSet<String>();
+    Set<String> nodeSet = new HashSet<>();
     JsonFactory jsonF = new JsonFactory();
     ObjectMapper mapper = new ObjectMapper();
     Reader input =
         new InputStreamReader(new FileInputStream(jobTrace), "UTF-8");
     try {
-      Iterator<Map> i = mapper.readValues(
-              jsonF.createJsonParser(input), Map.class);
+      Iterator<Map> i = mapper.readValues(jsonF.createParser(input), Map.class);
       while (i.hasNext()) {
-        Map jsonE = i.next();
-        List tasks = (List) jsonE.get("job.tasks");
-        for (Object o : tasks) {
-          Map jsonTask = (Map) o;
-          String hostname = jsonTask.get("container.host").toString();
-          nodeSet.add(hostname);
-        }
+        addNodes(nodeSet, i.next());
       }
     } finally {
       input.close();
@@ -123,30 +124,78 @@ public class SLSUtils {
     return nodeSet;
   }
 
+  private static void addNodes(Set<String> nodeSet, Map jsonEntry) {
+    if (jsonEntry.containsKey(SLSConfiguration.NUM_NODES)) {
+      int numNodes = Integer.parseInt(
+          jsonEntry.get(SLSConfiguration.NUM_NODES).toString());
+      int numRacks = 1;
+      if (jsonEntry.containsKey(SLSConfiguration.NUM_RACKS)) {
+        numRacks = Integer.parseInt(
+            jsonEntry.get(SLSConfiguration.NUM_RACKS).toString());
+      }
+      nodeSet.addAll(generateNodes(numNodes, numRacks));
+    }
+
+    if (jsonEntry.containsKey(SLSConfiguration.JOB_TASKS)) {
+      List tasks = (List) jsonEntry.get(SLSConfiguration.JOB_TASKS);
+      for (Object o : tasks) {
+        Map jsonTask = (Map) o;
+        String hostname = (String) jsonTask.get(SLSConfiguration.TASK_HOST);
+        if (hostname != null) {
+          nodeSet.add(hostname);
+        }
+      }
+    }
+  }
+
   /**
    * parse the input node file, return each host name
    */
-  public static Set<String> parseNodesFromNodeFile(String nodeFile)
-          throws IOException {
-    Set<String> nodeSet = new HashSet<String>();
+  public static Map<String, Resource> parseNodesFromNodeFile(String nodeFile,
+      Resource nmDefaultResource) throws IOException {
+    Map<String, Resource> nodeResourceMap = new HashMap<>();
     JsonFactory jsonF = new JsonFactory();
     ObjectMapper mapper = new ObjectMapper();
     Reader input =
         new InputStreamReader(new FileInputStream(nodeFile), "UTF-8");
     try {
-      Iterator<Map> i = mapper.readValues(
-              jsonF.createJsonParser(input), Map.class);
+      Iterator<Map> i = mapper.readValues(jsonF.createParser(input), Map.class);
       while (i.hasNext()) {
         Map jsonE = i.next();
         String rack = "/" + jsonE.get("rack");
         List tasks = (List) jsonE.get("nodes");
         for (Object o : tasks) {
           Map jsonNode = (Map) o;
-          nodeSet.add(rack + "/" + jsonNode.get("node"));
+          Resource nodeResource = Resources.clone(nmDefaultResource);
+          ResourceInformation[] infors = ResourceUtils.getResourceTypesArray();
+          for (ResourceInformation info : infors) {
+            if (jsonNode.get(info.getName()) != null) {
+              nodeResource.setResourceValue(info.getName(),
+                  Integer.parseInt(jsonNode.get(info.getName()).toString()));
+            }
+          }
+          nodeResourceMap.put(rack + "/" + jsonNode.get("node"), nodeResource);
         }
       }
     } finally {
       input.close();
+    }
+    return nodeResourceMap;
+  }
+
+  public static Set<? extends String> generateNodes(int numNodes,
+      int numRacks){
+    Set<String> nodeSet = new HashSet<>();
+    if (numRacks < 1) {
+      numRacks = 1;
+    }
+
+    if (numRacks > numNodes) {
+      numRacks = numNodes;
+    }
+
+    for (int i = 0; i < numNodes; i++) {
+      nodeSet.add("/rack" + i % numRacks + "/node" + i);
     }
     return nodeSet;
   }

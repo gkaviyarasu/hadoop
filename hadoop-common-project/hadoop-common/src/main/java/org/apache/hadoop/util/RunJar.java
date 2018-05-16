@@ -34,13 +34,16 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
 import java.util.regex.Pattern;
 
+import org.apache.commons.io.input.TeeInputStream;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.IOUtils.NullOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,6 +95,72 @@ public class RunJar {
    */
   public static void unJar(File jarFile, File toDir) throws IOException {
     unJar(jarFile, toDir, MATCH_ANY);
+  }
+
+  /**
+   * Unpack matching files from a jar. Entries inside the jar that do
+   * not match the given pattern will be skipped.
+   *
+   * @param inputStream the jar stream to unpack
+   * @param toDir the destination directory into which to unpack the jar
+   * @param unpackRegex the pattern to match jar entries against
+   *
+   * @throws IOException if an I/O error has occurred or toDir
+   * cannot be created and does not already exist
+   */
+  public static void unJar(InputStream inputStream, File toDir,
+                           Pattern unpackRegex)
+      throws IOException {
+    try (JarInputStream jar = new JarInputStream(inputStream)) {
+      int numOfFailedLastModifiedSet = 0;
+      for (JarEntry entry = jar.getNextJarEntry();
+           entry != null;
+           entry = jar.getNextJarEntry()) {
+        if (!entry.isDirectory() &&
+            unpackRegex.matcher(entry.getName()).matches()) {
+          File file = new File(toDir, entry.getName());
+          ensureDirectory(file.getParentFile());
+          try (OutputStream out = new FileOutputStream(file)) {
+            IOUtils.copyBytes(jar, out, BUFFER_SIZE);
+          }
+          if (!file.setLastModified(entry.getTime())) {
+            numOfFailedLastModifiedSet++;
+          }
+        }
+      }
+      if (numOfFailedLastModifiedSet > 0) {
+        LOG.warn("Could not set last modfied time for {} file(s)",
+            numOfFailedLastModifiedSet);
+      }
+      // ZipInputStream does not need the end of the file. Let's read it out.
+      // This helps with an additional TeeInputStream on the input.
+      IOUtils.copyBytes(inputStream, new NullOutputStream(), BUFFER_SIZE);
+    }
+  }
+
+  /**
+   * Unpack matching files from a jar. Entries inside the jar that do
+   * not match the given pattern will be skipped. Keep also a copy
+   * of the entire jar in the same directory for backward compatibility.
+   * TODO remove this feature in a new release and do only unJar
+   *
+   * @param inputStream the jar stream to unpack
+   * @param toDir the destination directory into which to unpack the jar
+   * @param unpackRegex the pattern to match jar entries against
+   *
+   * @throws IOException if an I/O error has occurred or toDir
+   * cannot be created and does not already exist
+   */
+  @Deprecated
+  public static void unJarAndSave(InputStream inputStream, File toDir,
+                           String name, Pattern unpackRegex)
+      throws IOException{
+    File file = new File(toDir, name);
+    ensureDirectory(toDir);
+    try (OutputStream jar = new FileOutputStream(file);
+         TeeInputStream teeInputStream = new TeeInputStream(inputStream, jar)) {
+      unJar(teeInputStream, toDir, unpackRegex);
+    }
   }
 
   /**
@@ -226,7 +295,7 @@ public class RunJar {
 
     unJar(file, workDir);
 
-    ClassLoader loader = createClassLoader(workDir);
+    ClassLoader loader = createClassLoader(file, workDir);
 
     Thread.currentThread().setContextClassLoader(loader);
     Class<?> mainClass = Class.forName(mainClassName, true, loader);
@@ -250,13 +319,14 @@ public class RunJar {
    * the user jar as well as the HADOOP_CLASSPATH. Otherwise, it creates a
    * classloader that simply adds the user jar to the classpath.
    */
-  private ClassLoader createClassLoader(final File workDir)
+  private ClassLoader createClassLoader(File file, final File workDir)
       throws MalformedURLException {
     ClassLoader loader;
     // see if the client classloader is enabled
     if (useClientClassLoader()) {
       StringBuilder sb = new StringBuilder();
       sb.append(workDir).append("/").
+          append(File.pathSeparator).append(file).
           append(File.pathSeparator).append(workDir).append("/classes/").
           append(File.pathSeparator).append(workDir).append("/lib/*");
       // HADOOP_CLASSPATH is added to the client classpath
@@ -276,6 +346,7 @@ public class RunJar {
     } else {
       List<URL> classPath = new ArrayList<>();
       classPath.add(new File(workDir + "/").toURI().toURL());
+      classPath.add(file.toURI().toURL());
       classPath.add(new File(workDir, "classes/").toURI().toURL());
       File[] libs = new File(workDir, "lib").listFiles();
       if (libs != null) {

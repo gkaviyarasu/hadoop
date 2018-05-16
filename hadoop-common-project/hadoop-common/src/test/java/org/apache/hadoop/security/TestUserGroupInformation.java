@@ -20,6 +20,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.retry.RetryPolicies;
+import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.ipc.TestRpcBase.TestTokenIdentifier;
 import org.apache.hadoop.metrics2.MetricsRecordBuilder;
 import org.apache.hadoop.security.SaslRpcServer.AuthMethod;
@@ -27,13 +29,21 @@ import org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod;
 import org.apache.hadoop.security.authentication.util.KerberosName;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.Time;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.Mockito;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 import javax.security.auth.Subject;
 import javax.security.auth.kerberos.KerberosPrincipal;
@@ -46,14 +56,21 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.lang.reflect.Method;
+import java.security.Principal;
 import java.security.PrivilegedExceptionAction;
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
+import java.util.Date;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
-
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import static org.apache.hadoop.fs.CommonConfigurationKeys.HADOOP_USER_GROUP_METRICS_PERCENTILES_INTERVALS;
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_KERBEROS_MIN_SECONDS_BEFORE_RELOGIN;
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTH_TO_LOCAL;
 import static org.apache.hadoop.test.MetricsAsserts.assertCounter;
 import static org.apache.hadoop.test.MetricsAsserts.assertCounterGt;
@@ -75,6 +92,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class TestUserGroupInformation {
+
+  static final Logger LOG = LoggerFactory.getLogger(
+      TestUserGroupInformation.class);
   final private static String USER_NAME = "user1@HADOOP.APACHE.ORG";
   final private static String GROUP1_NAME = "group1";
   final private static String GROUP2_NAME = "group2";
@@ -99,7 +119,14 @@ public class TestUserGroupInformation {
       throw new RuntimeException("UGI is not using its own security conf!");
     } 
   }
-  
+
+  // must be set immediately to avoid inconsistent testing issues.
+  static {
+    // fake the realm is kerberos is enabled
+    System.setProperty("java.security.krb5.kdc", "");
+    System.setProperty("java.security.krb5.realm", "DEFAULT.REALM");
+  }
+
   /** configure ugi */
   @BeforeClass
   public static void setup() {
@@ -110,9 +137,6 @@ public class TestUserGroupInformation {
     // that finds winutils.exe
     String home = System.getenv("HADOOP_HOME");
     System.setProperty("hadoop.home.dir", (home != null ? home : "."));
-    // fake the realm is kerberos is enabled
-    System.setProperty("java.security.krb5.kdc", "");
-    System.setProperty("java.security.krb5.realm", "DEFAULT.REALM");
   }
   
   @Before
@@ -865,7 +889,7 @@ public class TestUserGroupInformation {
     method.setAccessible(false);
   }
   
-  @Test(timeout=1000)
+  @Test(timeout=10000)
   public void testSetLoginUser() throws IOException {
     UserGroupInformation ugi = UserGroupInformation.createRemoteUser("test-user");
     UserGroupInformation.setLoginUser(ugi);
@@ -891,38 +915,14 @@ public class TestUserGroupInformation {
     ugi.addToken(new Text("regular-token"), token);
 
     // Now add cloned private token
-    ugi.addToken(new Text("private-token"), new Token.PrivateToken<TestTokenIdentifier>(token));
-    ugi.addToken(new Text("private-token1"), new Token.PrivateToken<TestTokenIdentifier>(token));
+    Text service = new Text("private-token");
+    ugi.addToken(service, token.privateClone(service));
+    Text service1 = new Text("private-token1");
+    ugi.addToken(service1, token.privateClone(service1));
 
     // Ensure only non-private tokens are returned
     Collection<Token<? extends TokenIdentifier>> tokens = ugi.getCredentials().getAllTokens();
     assertEquals(1, tokens.size());
-  }
-
-  @Test(timeout = 30000)
-  public void testCopySubjectAndUgi() throws IOException {
-    SecurityUtil.setAuthenticationMethod(AuthenticationMethod.SIMPLE, conf);
-    UserGroupInformation.setConfiguration(conf);
-    UserGroupInformation u1 = UserGroupInformation.getLoginUser();
-    assertNotNull(u1);
-    @SuppressWarnings("unchecked")
-    Token<? extends TokenIdentifier> tmpToken = mock(Token.class);
-    u1.addToken(tmpToken);
-
-    UserGroupInformation u2 = u1.copySubjectAndUgi();
-    assertEquals(u1.getAuthenticationMethod(), u2.getAuthenticationMethod());
-    assertNotSame(u1.getSubject(), u2.getSubject());
-    Credentials c1 = u1.getCredentials(), c2 = u2.getCredentials();
-    List<Text> sc1 = c1.getAllSecretKeys(), sc2 = c2.getAllSecretKeys();
-    assertArrayEquals(sc1.toArray(new Text[0]), sc2.toArray(new Text[0]));
-    Collection<Token<? extends TokenIdentifier>> ts1 = c1.getAllTokens(),
-        ts2 = c2.getAllTokens();
-    assertArrayEquals(ts1.toArray(new Token[0]), ts2.toArray(new Token[0]));
-    @SuppressWarnings("unchecked")
-    Token<? extends TokenIdentifier> token = mock(Token.class);
-    u2.addToken(token);
-    assertTrue(u2.getCredentials().getAllTokens().contains(token));
-    assertFalse(u1.getCredentials().getAllTokens().contains(token));
   }
 
   /**
@@ -1043,6 +1043,7 @@ public class TestUserGroupInformation {
     KeyTab keytab = KeyTab.getInstance();
     subject.getPrivateCredentials().add(keytab);
     UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
+
     ugi.doAs(new PrivilegedExceptionAction<Void>() {
       @Override
       public Void run() throws IOException {
@@ -1052,6 +1053,162 @@ public class TestUserGroupInformation {
         return null;
       }
     });
+  }
 
+  @Test
+  public void testGetNextRetryTime() throws Exception {
+    GenericTestUtils.setLogLevel(UserGroupInformation.LOG, Level.DEBUG);
+    final long reloginInterval = 1;
+    final long reloginIntervalMs = reloginInterval * 1000;
+    // Relogin happens every 1 second.
+    conf.setLong(HADOOP_KERBEROS_MIN_SECONDS_BEFORE_RELOGIN, reloginInterval);
+    SecurityUtil.setAuthenticationMethod(AuthenticationMethod.KERBEROS, conf);
+    UserGroupInformation.setConfiguration(conf);
+
+    // Suppose tgt start time is now, end time is 20 seconds from now.
+    final long now = Time.now();
+    final Date endDate = new Date(now + 20000);
+
+    // Explicitly test the exponential back-off logic.
+    // Suppose some time (10 seconds) passed.
+    // Verify exponential backoff and max=(login interval before endTime).
+    final long currentTime = now + 10000;
+    final long endTime = endDate.getTime();
+
+    assertEquals(0, UserGroupInformation.metrics.getRenewalFailures().value());
+    RetryPolicy rp = RetryPolicies.exponentialBackoffRetry(Long.SIZE - 2,
+        1000, TimeUnit.MILLISECONDS);
+    long lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    assertWithinBounds(
+        UserGroupInformation.metrics.getRenewalFailures().value(),
+        lastRetry, reloginIntervalMs, currentTime);
+
+    UserGroupInformation.metrics.getRenewalFailures().incr();
+    lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    assertWithinBounds(
+        UserGroupInformation.metrics.getRenewalFailures().value(),
+        lastRetry, reloginIntervalMs, currentTime);
+
+    UserGroupInformation.metrics.getRenewalFailures().incr();
+    lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    assertWithinBounds(
+        UserGroupInformation.metrics.getRenewalFailures().value(),
+        lastRetry, reloginIntervalMs, currentTime);
+
+    UserGroupInformation.metrics.getRenewalFailures().incr();
+    lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    assertWithinBounds(
+        UserGroupInformation.metrics.getRenewalFailures().value(),
+        lastRetry, reloginIntervalMs, currentTime);
+
+    // last try should be right before expiry.
+    UserGroupInformation.metrics.getRenewalFailures().incr();
+    lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    String str =
+        "5th retry, now:" + currentTime + ", retry:" + lastRetry;
+    LOG.info(str);
+    assertEquals(str, endTime - reloginIntervalMs, lastRetry);
+
+    // make sure no more retries after (tgt endTime - login interval).
+    UserGroupInformation.metrics.getRenewalFailures().incr();
+    lastRetry =
+        UserGroupInformation.getNextTgtRenewalTime(endTime, currentTime, rp);
+    str = "overflow retry, now:" + currentTime + ", retry:" + lastRetry;
+    LOG.info(str);
+    assertEquals(str, endTime - reloginIntervalMs, lastRetry);
+  }
+
+  private void assertWithinBounds(final int numFailures, final long lastRetry,
+      final long reloginIntervalMs, long now) {
+    // shift is 2 to the power of (numFailure).
+    int shift = numFailures + 1;
+    final long lower = now + reloginIntervalMs * (long)((1 << shift) * 0.5);
+    final long upper = now + reloginIntervalMs * (long)((1 << shift) * 1.5);
+    final String str = new String("Retry#" + (numFailures + 1) + ", now:" + now
+        + ", lower bound:" + lower + ", upper bound:" + upper
+        + ", retry:" + lastRetry);
+    LOG.info(str);
+    assertTrue(str, lower <= lastRetry && lastRetry < upper);
+  }
+
+  // verify that getCurrentUser on the same and different subjects can be
+  // concurrent.  Ie. no synchronization.
+  @Test(timeout=8000)
+  public void testConcurrentGetCurrentUser() throws Exception {
+    final CyclicBarrier barrier = new CyclicBarrier(2);
+    final CountDownLatch latch = new CountDownLatch(1);
+
+    final UserGroupInformation testUgi1 =
+        UserGroupInformation.createRemoteUser("testUgi1");
+
+    final UserGroupInformation testUgi2 =
+        UserGroupInformation.createRemoteUser("testUgi2");
+
+    // swap the User with a spy to allow getCurrentUser to block when the
+    // spy is called for the user name.
+    Set<Principal> principals = testUgi1.getSubject().getPrincipals();
+    User user =
+        testUgi1.getSubject().getPrincipals(User.class).iterator().next();
+    final User spyUser = Mockito.spy(user);
+    principals.remove(user);
+    principals.add(spyUser);
+    when(spyUser.getName()).thenAnswer(new Answer<String>(){
+      @Override
+      public String answer(InvocationOnMock invocation) throws Throwable {
+        latch.countDown();
+        barrier.await();
+        return (String)invocation.callRealMethod();
+      }
+    });
+    // wait for the thread to block on the barrier in getCurrentUser.
+    Future<UserGroupInformation> blockingLookup =
+        Executors.newSingleThreadExecutor().submit(
+            new Callable<UserGroupInformation>(){
+              @Override
+              public UserGroupInformation call() throws Exception {
+                return testUgi1.doAs(
+                    new PrivilegedExceptionAction<UserGroupInformation>() {
+                      @Override
+                      public UserGroupInformation run() throws Exception {
+                        return UserGroupInformation.getCurrentUser();
+                      }
+                    });
+              }
+            });
+    latch.await();
+
+    // old versions of mockito synchronize on returning mocked answers so
+    // the blocked getCurrentUser will block all other calls to getName.
+    // workaround this by swapping out the spy with the original User.
+    principals.remove(spyUser);
+    principals.add(user);
+    // concurrent getCurrentUser on ugi1 should not be blocked.
+    UserGroupInformation ugi;
+    ugi = testUgi1.doAs(
+        new PrivilegedExceptionAction<UserGroupInformation>() {
+          @Override
+          public UserGroupInformation run() throws Exception {
+            return UserGroupInformation.getCurrentUser();
+          }
+        });
+    assertSame(testUgi1.getSubject(), ugi.getSubject());
+    // concurrent getCurrentUser on ugi2 should not be blocked.
+    ugi = testUgi2.doAs(
+        new PrivilegedExceptionAction<UserGroupInformation>() {
+          @Override
+          public UserGroupInformation run() throws Exception {
+            return UserGroupInformation.getCurrentUser();
+          }
+        });
+    assertSame(testUgi2.getSubject(), ugi.getSubject());
+
+    // unblock the original call.
+    barrier.await();
+    assertSame(testUgi1.getSubject(), blockingLookup.get().getSubject());
   }
 }

@@ -19,7 +19,6 @@
 package org.apache.hadoop.yarn.api.records;
 
 import org.apache.hadoop.classification.InterfaceAudience.Public;
-import org.apache.hadoop.classification.InterfaceStability.Evolving;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.yarn.util.Records;
 
@@ -38,7 +37,7 @@ public abstract class ReservationDefinition {
   @Unstable
   public static ReservationDefinition newInstance(long arrival, long deadline,
       ReservationRequests reservationRequests, String name,
-      String recurrenceExpression) {
+      String recurrenceExpression, Priority priority) {
     ReservationDefinition rDefinition =
         Records.newRecord(ReservationDefinition.class);
     rDefinition.setArrival(arrival);
@@ -46,6 +45,7 @@ public abstract class ReservationDefinition {
     rDefinition.setReservationRequests(reservationRequests);
     rDefinition.setReservationName(name);
     rDefinition.setRecurrenceExpression(recurrenceExpression);
+    rDefinition.setPriority(priority);
     return rDefinition;
   }
 
@@ -53,8 +53,8 @@ public abstract class ReservationDefinition {
   @Unstable
   public static ReservationDefinition newInstance(long arrival, long deadline,
       ReservationRequests reservationRequests, String name) {
-    ReservationDefinition rDefinition =
-        newInstance(arrival, deadline, reservationRequests, name, "0");
+    ReservationDefinition rDefinition = newInstance(arrival, deadline,
+        reservationRequests, name, "0", Priority.UNDEFINED);
     return rDefinition;
   }
 
@@ -130,7 +130,7 @@ public abstract class ReservationDefinition {
    *         allocation in the scheduler
    */
   @Public
-  @Evolving
+  @Unstable
   public abstract String getReservationName();
 
   /**
@@ -142,7 +142,7 @@ public abstract class ReservationDefinition {
    *          allocation in the scheduler
    */
   @Public
-  @Evolving
+  @Unstable
   public abstract void setReservationName(String name);
 
   /**
@@ -155,12 +155,16 @@ public abstract class ReservationDefinition {
    * are explicitly cancelled and have higher priority than non-periodic jobs
    * (during initial placement and replanning). Periodic job allocations are
    * consistent across runs (flexibility in allocation is leveraged only during
-   * initial placement, allocations remain consistent thereafter).
+   * initial placement, allocations remain consistent thereafter). Note that
+   * as a long, the recurrence expression must be greater than the duration of
+   * the reservation (deadline - arrival). Also note that the configured max
+   * period must be divisible by the recurrence expression if expressed as a
+   * long.
    *
    * @return recurrence of this reservation
    */
   @Public
-  @Evolving
+  @Unstable
   public abstract String getRecurrenceExpression();
 
   /**
@@ -173,12 +177,44 @@ public abstract class ReservationDefinition {
    * are explicitly cancelled and have higher priority than non-periodic jobs
    * (during initial placement and replanning). Periodic job allocations are
    * consistent across runs (flexibility in allocation is leveraged only during
-   * initial placement, allocations remain consistent thereafter).
+   * initial placement, allocations remain consistent thereafter). Note that
+   * as a long, the recurrence expression must be greater than the duration of
+   * the reservation (deadline - arrival). Also note that the configured max
+   * period must be divisible by the recurrence expression if expressed as a
+   * long.
    *
    * @param recurrenceExpression recurrence interval of this reservation
    */
   @Public
-  @Evolving
+  @Unstable
   public abstract void setRecurrenceExpression(String recurrenceExpression);
+
+  /**
+   * Get the priority for this reservation. A lower number for priority
+   * indicates a higher priority reservation. Recurring reservations are
+   * always higher priority than non-recurring reservations. Priority for
+   * non-recurring reservations are only compared with non-recurring
+   * reservations. Likewise for recurring reservations.
+   *
+   * @return int representing the priority of the reserved resource
+   *         allocation in the scheduler
+   */
+  @Public
+  @Unstable
+  public abstract Priority getPriority();
+
+  /**
+   * Set the priority for this reservation. A lower number for priority
+   * indicates a higher priority reservation. Recurring reservations are
+   * always higher priority than non-recurring reservations. Priority for
+   * non-recurring reservations are only compared with non-recurring
+   * reservations. Likewise for recurring reservations.
+   *
+   * @param priority representing the priority of the reserved resource
+   *          allocation in the scheduler
+   */
+  @Public
+  @Unstable
+  public abstract void setPriority(Priority priority);
 
 }

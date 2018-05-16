@@ -67,3 +67,11 @@ service NewerProtobufRpcProto {
   rpc ping(EmptyRequestProto) returns (EmptyResponseProto);
   rpc echo(EmptyRequestProto) returns (EmptyResponseProto);
 }
+
+service CustomProto {
+  rpc ping(EmptyRequestProto) returns (EmptyResponseProto);
+}
+
+service TestProtobufRpcHandoffProto {
+  rpc sleep(SleepRequestProto2) returns (SleepResponseProto2);
+}

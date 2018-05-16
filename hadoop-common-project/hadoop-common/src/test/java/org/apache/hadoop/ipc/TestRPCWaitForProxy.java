@@ -19,6 +19,7 @@ package org.apache.hadoop.ipc;
 
 import org.apache.hadoop.conf.Configuration;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,12 @@ public class TestRPCWaitForProxy extends TestRpcBase {
       LOG = LoggerFactory.getLogger(TestRPCWaitForProxy.class);
 
   private static final Configuration conf = new Configuration();
+
+  @Before
+  public void setupProtocolEngine() {
+    RPC.setProtocolEngine(conf, TestRpcService.class,
+        ProtobufRpcEngine.class);
+  }
 
   /**
    * This tests that the time-bounded wait for a proxy operation works, and

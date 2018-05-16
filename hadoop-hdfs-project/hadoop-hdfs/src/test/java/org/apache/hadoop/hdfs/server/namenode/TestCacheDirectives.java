@@ -72,6 +72,7 @@ import org.apache.hadoop.hdfs.protocol.CachePoolStats;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor.CachedBlocksList.Type;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeManager;
@@ -89,6 +90,7 @@ import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com.google.common.base.Supplier;
 
@@ -418,6 +420,9 @@ public class TestCacheDirectives {
         setMode(new FsPermission((short)0777)));
     proto.addCachePool(new CachePoolInfo("pool4").
         setMode(new FsPermission((short)0)));
+    proto.addCachePool(new CachePoolInfo("pool5").
+        setMode(new FsPermission((short)0007))
+        .setOwnerName(unprivilegedUser.getShortUserName()));
 
     CacheDirectiveInfo alpha = new CacheDirectiveInfo.Builder().
         setPath(new Path("/alpha")).
@@ -485,6 +490,18 @@ public class TestCacheDirectives {
     }
 
     long deltaId = addAsUnprivileged(delta);
+
+    try {
+      addAsUnprivileged(new CacheDirectiveInfo.Builder().
+          setPath(new Path("/epsilon")).
+          setPool("pool5").
+          build());
+      fail("expected an error when adding to a pool with " +
+          "mode 007 (no permissions for pool owner).");
+    } catch (AccessControlException e) {
+      GenericTestUtils.
+          assertExceptionContains("Permission denied while accessing pool", e);
+    }
 
     // We expect the following to succeed, because DistributedFileSystem
     // qualifies the path.
@@ -1530,5 +1547,13 @@ public class TestCacheDirectives {
     } finally {
       DataNodeTestUtils.setCacheReportsDisabledForTests(cluster, false);
     }
+  }
+
+  @Test
+  public void testNoLookupsWhenNotUsed() throws Exception {
+    CacheManager cm = cluster.getNamesystem().getCacheManager();
+    LocatedBlocks locations = Mockito.mock(LocatedBlocks.class);
+    cm.setCachedLocations(locations);
+    Mockito.verifyZeroInteractions(locations);
   }
 }

@@ -18,11 +18,11 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -40,12 +40,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ResourceSet {
 
-  private static final Log LOG = LogFactory.getLog(ResourceSet.class);
+  private static final Logger LOG =
+       LoggerFactory.getLogger(ResourceSet.class);
 
   // resources by localization state (localized, pending, failed)
-  private Map<Path, List<String>> localizedResources =
+  private Map<String, Path> localizedResources =
       new ConcurrentHashMap<>();
-  private Map<LocalResourceRequest, List<String>> pendingResources =
+  private Map<LocalResourceRequest, Set<String>> pendingResources =
       new ConcurrentHashMap<>();
   private Set<LocalResourceRequest> resourcesFailedToBeLocalized =
       new HashSet<>();
@@ -69,7 +70,7 @@ public class ResourceSet {
     if (localResourceMap == null || localResourceMap.isEmpty()) {
       return null;
     }
-    Map<LocalResourceRequest, List<String>> allResources = new HashMap<>();
+    Map<LocalResourceRequest, Set<String>> allResources = new HashMap<>();
     List<LocalResourceRequest> publicList = new ArrayList<>();
     List<LocalResourceRequest> privateList = new ArrayList<>();
     List<LocalResourceRequest> appList = new ArrayList<>();
@@ -77,7 +78,7 @@ public class ResourceSet {
     for (Map.Entry<String, LocalResource> rsrc : localResourceMap.entrySet()) {
       LocalResource resource = rsrc.getValue();
       LocalResourceRequest req = new LocalResourceRequest(rsrc.getValue());
-      allResources.putIfAbsent(req, new ArrayList<>());
+      allResources.putIfAbsent(req, new HashSet<>());
       allResources.get(req).add(rsrc.getKey());
       storeSharedCacheUploadPolicy(req,
           resource.getShouldBeUploadedToSharedCache());
@@ -121,18 +122,24 @@ public class ResourceSet {
    * @param location The path where the resource is localized
    * @return The list of symlinks for the localized resources.
    */
-  public List<String> resourceLocalized(LocalResourceRequest request,
+  public Set<String> resourceLocalized(LocalResourceRequest request,
       Path location) {
-    List<String> symlinks = pendingResources.remove(request);
+    Set<String> symlinks = pendingResources.remove(request);
     if (symlinks == null) {
       return null;
     } else {
-      localizedResources.put(location, symlinks);
+      for (String symlink : symlinks) {
+        localizedResources.put(symlink, location);
+      }
       return symlinks;
     }
   }
 
   public void resourceLocalizationFailed(LocalResourceRequest request) {
+    // Skip null request when localization failed for running container
+    if (request == null) {
+      return;
+    }
     pendingResources.remove(request);
     resourcesFailedToBeLocalized.add(request);
   }
@@ -175,7 +182,12 @@ public class ResourceSet {
   }
 
   public Map<Path, List<String>> getLocalizedResources() {
-    return localizedResources;
+    Map<Path, List<String>> map = new HashMap<>();
+    for (Map.Entry<String, Path> entry : localizedResources.entrySet()) {
+      map.putIfAbsent(entry.getValue(), new ArrayList<>());
+      map.get(entry.getValue()).add(entry.getKey());
+    }
+    return map;
   }
 
   public Map<LocalResourceRequest, Path> getResourcesToBeUploaded() {
@@ -186,7 +198,25 @@ public class ResourceSet {
     return resourcesUploadPolicies;
   }
 
-  public Map<LocalResourceRequest, List<String>> getPendingResources() {
+  public Map<LocalResourceRequest, Set<String>> getPendingResources() {
     return pendingResources;
+  }
+
+  public static ResourceSet merge(ResourceSet... resourceSets) {
+    ResourceSet merged = new ResourceSet();
+    for (ResourceSet rs : resourceSets) {
+      // This should overwrite existing symlinks
+      merged.localizedResources.putAll(rs.localizedResources);
+
+      merged.resourcesToBeUploaded.putAll(rs.resourcesToBeUploaded);
+      merged.resourcesUploadPolicies.putAll(rs.resourcesUploadPolicies);
+
+      // TODO : START : Should we de-dup here ?
+      merged.publicRsrcs.addAll(rs.publicRsrcs);
+      merged.privateRsrcs.addAll(rs.privateRsrcs);
+      merged.appRsrcs.addAll(rs.appRsrcs);
+      // TODO : END
+    }
+    return merged;
   }
 }

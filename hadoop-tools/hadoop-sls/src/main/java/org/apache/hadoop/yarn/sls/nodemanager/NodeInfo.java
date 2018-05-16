@@ -20,6 +20,7 @@ package org.apache.hadoop.yarn.sls.nodemanager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -36,7 +37,7 @@ import org.apache.hadoop.yarn.api.records.NodeState;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceUtilization;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
-import org.apache.hadoop.yarn.server.api.records.QueuedContainersStatus;
+import org.apache.hadoop.yarn.server.api.records.OpportunisticContainersStatus;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode
@@ -144,8 +145,8 @@ public class NodeInfo {
       return runningApplications;
     }
 
-    public void updateNodeHeartbeatResponseForCleanup(
-            NodeHeartbeatResponse response) {
+    public void setAndUpdateNodeHeartbeatResponse(
+        NodeHeartbeatResponse response) {
     }
 
     public NodeHeartbeatResponse getLastNodeHeartBeatResponse() {
@@ -179,19 +180,12 @@ public class NodeInfo {
     }
 
     @Override
-    public void updateNodeHeartbeatResponseForContainersDecreasing(
-        NodeHeartbeatResponse response) {
-      // TODO Auto-generated method stub
-      
-    }
-
-    @Override
     public List<Container> pullNewlyIncreasedContainers() {
       // TODO Auto-generated method stub
       return null;
     }
 
-    public QueuedContainersStatus getQueuedContainersStatus() {
+    public OpportunisticContainersStatus getOpportunisticContainersStatus() {
       return null;
     }
 
@@ -216,6 +210,16 @@ public class NodeInfo {
 
     @Override
     public Integer getDecommissioningTimeout() {
+      return null;
+    }
+
+    @Override
+    public Map<String, Long> getAllocationTagsWithCount() {
+      return null;
+    }
+
+    @Override
+    public Resource getPhysicalResource() {
       return null;
     }
   }

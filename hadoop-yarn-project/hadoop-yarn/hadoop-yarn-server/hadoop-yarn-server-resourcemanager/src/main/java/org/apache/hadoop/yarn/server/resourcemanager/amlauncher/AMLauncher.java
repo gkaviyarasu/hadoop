@@ -66,7 +66,6 @@ import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.hadoop.yarn.util.timeline.TimelineUtils;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Joiner;
 
 /**
  * The launch of the AM itself.
@@ -82,7 +81,6 @@ public class AMLauncher implements Runnable {
   private final AMLauncherEventType eventType;
   private final RMContext rmContext;
   private final Container masterContainer;
-  private final boolean logCommandLine;
 
   @SuppressWarnings("rawtypes")
   private final EventHandler handler;
@@ -95,9 +93,6 @@ public class AMLauncher implements Runnable {
     this.rmContext = rmContext;
     this.handler = rmContext.getDispatcher().getEventHandler();
     this.masterContainer = application.getMasterContainer();
-    this.logCommandLine =
-        conf.getBoolean(YarnConfiguration.RM_AMLAUNCHER_LOG_COMMAND,
-          YarnConfiguration.DEFAULT_RM_AMLAUNCHER_LOG_COMMAND);
   }
 
   private void connect() throws IOException {
@@ -110,7 +105,7 @@ public class AMLauncher implements Runnable {
     connect();
     ContainerId masterContainerID = masterContainer.getId();
     ApplicationSubmissionContext applicationContext =
-      application.getSubmissionContext();
+        application.getSubmissionContext();
     LOG.info("Setting up container " + masterContainer
         + " for AM " + application.getAppAttemptId());
     ContainerLaunchContext launchContext =
@@ -194,41 +189,16 @@ public class AMLauncher implements Runnable {
     ContainerLaunchContext container =
         applicationMasterContext.getAMContainerSpec();
 
-    if (LOG.isDebugEnabled()) {
-      StringBuilder message = new StringBuilder("Command to launch container ");
-
-      message.append(containerID).append(" : ");
-
-      if (logCommandLine) {
-        message.append(Joiner.on(",").join(container.getCommands()));
-      } else {
-        message.append("<REDACTED> -- Set ");
-        message.append(YarnConfiguration.RM_AMLAUNCHER_LOG_COMMAND);
-        message.append(" to true to reenable command logging");
-      }
-
-      LOG.debug(message.toString());
+    if (container == null){
+      throw new IOException(containerID +
+            " has been cleaned before launched");
     }
-
-    // Populate the current queue name in the environment variable.
-    setupQueueNameEnv(container, applicationMasterContext);
-
     // Finalize the container
     setupTokens(container, containerID);
     // set the flow context optionally for timeline service v.2
     setFlowContext(container);
 
     return container;
-  }
-
-  private void setupQueueNameEnv(ContainerLaunchContext container,
-      ApplicationSubmissionContext applicationMasterContext) {
-    String queueName = applicationMasterContext.getQueue();
-    if (queueName == null) {
-      queueName = YarnConfiguration.DEFAULT_QUEUE_NAME;
-    }
-    container.getEnvironment().put(ApplicationConstants.Environment
-            .YARN_RESOURCEMANAGER_APPLICATION_QUEUE.key(), queueName);
   }
 
   @Private
@@ -337,13 +307,9 @@ public class AMLauncher implements Runnable {
         LOG.info("Launching master" + application.getAppAttemptId());
         launch();
         handler.handle(new RMAppAttemptEvent(application.getAppAttemptId(),
-            RMAppAttemptEventType.LAUNCHED));
+            RMAppAttemptEventType.LAUNCHED, System.currentTimeMillis()));
       } catch(Exception ie) {
-        String message = "Error launching " + application.getAppAttemptId()
-            + ". Got exception: " + StringUtils.stringifyException(ie);
-        LOG.info(message);
-        handler.handle(new RMAppAttemptEvent(application
-            .getAppAttemptId(), RMAppAttemptEventType.LAUNCH_FAILED, message));
+        onAMLaunchFailed(masterContainer.getId(), ie);
       }
       break;
     case CLEANUP:
@@ -377,5 +343,14 @@ public class AMLauncher implements Runnable {
     } else {
       throw (IOException) t;
     }
+  }
+
+  @SuppressWarnings("unchecked")
+  protected void onAMLaunchFailed(ContainerId containerId, Exception ie) {
+    String message = "Error launching " + application.getAppAttemptId()
+            + ". Got exception: " + StringUtils.stringifyException(ie);
+    LOG.info(message);
+    handler.handle(new RMAppAttemptEvent(application
+           .getAppAttemptId(), RMAppAttemptEventType.LAUNCH_FAILED, message));
   }
 }
